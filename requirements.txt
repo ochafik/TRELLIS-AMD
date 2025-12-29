@@ -19,6 +19,7 @@ pyvista
 pymeshfix
 igraph
 transformers
+huggingface_hub
 
 # Utils3d - specific commit for compatibility
 git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
