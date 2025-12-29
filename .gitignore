@@ -48,3 +48,14 @@ Thumbs.db
 
 # Temp files
 *.tmp
+
+# Claude Code
+.claude/
+
+# Debug artifacts
+debug_*.py
+*.deb
+*.pt
+
+# Test stages cache
+test_stages/

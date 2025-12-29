@@ -18,6 +18,7 @@ This is a fork of [Microsoft TRELLIS](https://github.com/microsoft/TRELLIS) modi
 
 ## Requirements
 
+### Linux
 - AMD GPU (tested: RX 7800 XT, RDNA3)
 - ROCm 6.4+
 - Python 3.10+
@@ -29,7 +30,23 @@ This is a fork of [Microsoft TRELLIS](https://github.com/microsoft/TRELLIS) modi
 sudo apt install python3-venv python3-full libsparsehash-dev
 ```
 
+### Windows (Experimental)
+- AMD GPU: RX 7000/9000 series or Ryzen AI APUs (Strix Halo)
+- Python 3.12 (required by AMD ROCm wheels)
+- Visual Studio 2022 with C++ Build Tools
+- ~16GB VRAM recommended
+
+```powershell
+# Install Python 3.12
+winget install -e --id Python.Python.3.12
+
+# Install Visual Studio Build Tools (if needed)
+winget install -e --id Microsoft.VisualStudio.2022.BuildTools
+```
+
 ## Quick Start
+
+### Linux
 
 ```bash
 # Clone the repository
@@ -43,6 +60,37 @@ chmod +x install_amd.sh
 # Activate environment and run
 source .venv/bin/activate
 ATTN_BACKEND=sdpa XFORMERS_DISABLED=1 SPARSE_BACKEND=torchsparse python app.py
+```
+
+### Windows
+
+> **Note**: Windows support is experimental, based on AMD's new ROCm for Windows via [TheRock](https://github.com/ROCm/TheRock).
+
+```powershell
+# Clone to a path WITHOUT spaces (important!)
+git clone https://github.com/CalebisGross/TRELLIS-AMD C:\dev\TRELLIS-AMD
+cd C:\dev\TRELLIS-AMD
+
+# For Strix Halo APU (gfx1151) - default
+.\install_amd_windows.ps1
+
+# For other GPUs, specify the architecture:
+.\install_amd_windows.ps1 -GpuArch gfx1100  # RX 7900 XTX/XT
+.\install_amd_windows.ps1 -GpuArch gfx1101  # RX 7800 XT
+.\install_amd_windows.ps1 -GpuArch gfx1201  # RX 9070 XT
+
+# Activate environment and run
+.\.venv\Scripts\Activate.ps1
+$env:ATTN_BACKEND = "sdpa"
+$env:XFORMERS_DISABLED = "1"
+$env:SPARSE_BACKEND = "torchsparse"
+python app.py
+```
+
+Or use the batch file:
+```cmd
+set GPU_ARCH=gfx1151
+install_amd_windows.bat
 ```
 
 Then open http://localhost:7860 in your browser.
@@ -89,17 +137,45 @@ The GLB export shows progress in console:
 
 ## Troubleshooting
 
-### GPU Hang/Crash
+### Linux
+
+#### GPU Hang/Crash
 Ensure you're using ROCm 6.4+ and PyTorch built for ROCm.
 
-### Empty Mesh
+#### Empty Mesh
 Check that `fill_holes=False` is set in `trellis/utils/postprocessing_utils.py`.
 
-### CUDA Symbol Errors  
+#### CUDA Symbol Errors
 Make sure you're using the AMD-modified extensions in this repo, not the original CUDA ones.
 
-### torchsparse "no attribute" Error
+#### torchsparse "no attribute" Error
 Rebuild with: `cd extensions/torchsparse && CUDA_HOME=/opt/rocm FORCE_CUDA=1 pip install . --no-build-isolation`
+
+### Windows
+
+#### Extension Build Fails
+1. Install Visual Studio 2022 Build Tools with C++ workload
+2. Make sure you're using Python 3.12 (required for ROCm Windows wheels)
+3. Avoid paths with spaces - clone to `C:\dev\TRELLIS-AMD` instead
+
+#### PyTorch Not Detecting GPU
+1. Verify your GPU is supported (RX 7000/9000 series or Ryzen AI)
+2. Install the latest AMD drivers
+3. Check with: `python -c "import torch; print(torch.cuda.is_available())"`
+
+#### "rocminfo" Not Found
+The `rocm[devel]` package may not be available for all GPU architectures on Windows.
+The extensions should still build using PyTorch's built-in HIP support.
+
+#### Out of Memory Errors
+Windows ROCm has known memory management issues on Ryzen AI APUs. Try:
+- Close other GPU-intensive applications
+- Reduce batch sizes in the application
+
+#### Known Windows Limitations
+- Only inference is fully supported (training may have issues)
+- Only Python 3.12 is supported
+- Some intermittent crashes may occur - this is expected with the preview ROCm stack
 
 ## Credits
 
