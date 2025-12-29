@@ -19,9 +19,15 @@ This is a fork of [Microsoft TRELLIS](https://github.com/microsoft/TRELLIS) modi
 ## Requirements
 
 - AMD GPU (tested: RX 7800 XT, RDNA3)
-- ROCm 6.4+ 
+- ROCm 6.4+
 - Python 3.10+
 - ~16GB VRAM recommended
+- System packages: `python3-venv`, `libsparsehash-dev`
+
+```bash
+# Install system dependencies (Ubuntu/Debian)
+sudo apt install python3-venv python3-full libsparsehash-dev
+```
 
 ## Quick Start
 

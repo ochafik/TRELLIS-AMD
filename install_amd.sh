@@ -17,6 +17,20 @@ if ! command -v rocminfo &> /dev/null; then
     exit 1
 fi
 
+# Check for required system packages
+MISSING_PKGS=""
+if ! dpkg -s libsparsehash-dev &>/dev/null 2>&1; then
+    MISSING_PKGS="$MISSING_PKGS libsparsehash-dev"
+fi
+if ! python3 -c "import venv" &>/dev/null 2>&1; then
+    MISSING_PKGS="$MISSING_PKGS python3-venv"
+fi
+if [ -n "$MISSING_PKGS" ]; then
+    echo "ERROR: Missing required system packages:$MISSING_PKGS"
+    echo "Install with: sudo apt install$MISSING_PKGS"
+    exit 1
+fi
+
 # Detect GPU
 GPU_ARCH=$(rocminfo | grep -o 'gfx[0-9a-z]*' | head -1)
 if [ -z "$GPU_ARCH" ]; then
@@ -31,8 +45,16 @@ cd "$SCRIPT_DIR"
 
 echo ""
 echo "[1/8] Creating Python virtual environment..."
-if [ ! -d ".venv" ]; then
+# Check if venv exists and is valid (has activate script)
+if [ ! -f ".venv/bin/activate" ]; then
+    echo "Creating new virtual environment..."
+    rm -rf .venv 2>/dev/null || true
     python3 -m venv .venv
+    if [ ! -f ".venv/bin/activate" ]; then
+        echo "ERROR: Failed to create virtual environment."
+        echo "Try: sudo apt install python3-venv python3-full"
+        exit 1
+    fi
 fi
 source .venv/bin/activate
 

@@ -74,33 +74,38 @@ COMMON_FLAGS+=' -DPYBIND11_COMPILER_TYPE="_gcc" -DPYBIND11_STDLIB="_libstdcpp" -
 PYTHON_INCLUDE_PATH=$(python3 -c "import sysconfig; print(sysconfig.get_path('include'))")
 echo "Python include: $PYTHON_INCLUDE_PATH"
 
-INCLUDES="-I${TORCH_INCLUDE}"
-INCLUDES+=" -I${TORCH_INCLUDE}/torch/csrc/api/include"
-INCLUDES+=" -I${TORCH_INCLUDE}/TH -I${TORCH_INCLUDE}/THC -I${TORCH_INCLUDE}/THH"
-INCLUDES+=" -I${ROCM_DIR}/include"
-INCLUDES+=" -I${PYTHON_INCLUDE_PATH}"
-INCLUDES+=" -I${VENV_DIR}/include"
-INCLUDES+=" -I${SCRIPT_DIR}/third_party/glm/"
-INCLUDES+=" -I${HIP_RASTERIZER}"
+# Use arrays for proper handling of paths with spaces
+INCLUDES=(
+    "-I${TORCH_INCLUDE}"
+    "-I${TORCH_INCLUDE}/torch/csrc/api/include"
+    "-I${TORCH_INCLUDE}/TH"
+    "-I${TORCH_INCLUDE}/THC"
+    "-I${TORCH_INCLUDE}/THH"
+    "-I${ROCM_DIR}/include"
+    "-I${PYTHON_INCLUDE_PATH}"
+    "-I${VENV_DIR}/include"
+    "-I${SCRIPT_DIR}/third_party/glm/"
+    "-I${HIP_RASTERIZER}"
+)
 
 echo "[1/5] Compiling rasterizer_impl.hip..."
-${HIPCC} ${COMMON_FLAGS} ${INCLUDES} -c "${HIP_RASTERIZER}/rasterizer_impl.hip" -o "${BUILD_DIR}/rasterizer_impl.o"
+"${HIPCC}" ${COMMON_FLAGS} "${INCLUDES[@]}" -c "${HIP_RASTERIZER}/rasterizer_impl.hip" -o "${BUILD_DIR}/rasterizer_impl.o"
 
 echo "[2/5] Compiling forward.hip..."
-${HIPCC} ${COMMON_FLAGS} ${INCLUDES} -c "${HIP_RASTERIZER}/forward.hip" -o "${BUILD_DIR}/forward.o"
+"${HIPCC}" ${COMMON_FLAGS} "${INCLUDES[@]}" -c "${HIP_RASTERIZER}/forward.hip" -o "${BUILD_DIR}/forward.o"
 
 echo "[3/5] Compiling backward.hip..."
-${HIPCC} ${COMMON_FLAGS} ${INCLUDES} -c "${HIP_RASTERIZER}/backward.hip" -o "${BUILD_DIR}/backward.o"
+"${HIPCC}" ${COMMON_FLAGS} "${INCLUDES[@]}" -c "${HIP_RASTERIZER}/backward.hip" -o "${BUILD_DIR}/backward.o"
 
 echo "[4/5] Compiling rasterize_points.hip..."
-${HIPCC} ${COMMON_FLAGS} ${INCLUDES} -c "${SCRIPT_DIR}/rasterize_points.hip" -o "${BUILD_DIR}/rasterize_points.o"
+"${HIPCC}" ${COMMON_FLAGS} "${INCLUDES[@]}" -c "${SCRIPT_DIR}/rasterize_points.hip" -o "${BUILD_DIR}/rasterize_points.o"
 
 echo "[5/5] Compiling ext.cpp..."
 g++ -fPIC -O3 -std=c++17 \
     -D__HIP_PLATFORM_AMD__=1 -DUSE_ROCM=1 -DHIPBLAS_V2 \
     -DTORCH_API_INCLUDE_EXTENSION_H -DTORCH_EXTENSION_NAME=_C -D_GLIBCXX_USE_CXX11_ABI=1 \
     '-DPYBIND11_COMPILER_TYPE="_gcc"' '-DPYBIND11_STDLIB="_libstdcpp"' '-DPYBIND11_BUILD_ABI="_cxxabi1011"' \
-    ${INCLUDES} -c "${SCRIPT_DIR}/ext.cpp" -o "${BUILD_DIR}/ext.o"
+    "${INCLUDES[@]}" -c "${SCRIPT_DIR}/ext.cpp" -o "${BUILD_DIR}/ext.o"
 
 echo "[LINK] Creating shared library..."
 g++ -shared -Wl,-O1 -Wl,-Bsymbolic-functions \
