@@ -1,0 +1,4 @@
+// Compatibility header: redirect google/dense_hash_map to sparsehash/dense_hash_map
+// The sparsehash-c11 library moved headers from google/ to sparsehash/
+// but still uses namespace google
+#include <sparsehash/dense_hash_map>

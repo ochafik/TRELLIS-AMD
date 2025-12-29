@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <torch/torch.h>
 
-#include <THH/THHAtomics.cuh>
+#include <THH\THHAtomics.cuh>
 #include <cmath>
 
 // to_dense: feats (N x C), coords (N x 4), output (B x H x W x D x C)

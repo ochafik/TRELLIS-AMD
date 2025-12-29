@@ -1,0 +1,2 @@
+// Compatibility header: redirect google/sparse_hash_set to sparsehash/sparse_hash_set
+#include <sparsehash/sparse_hash_set>

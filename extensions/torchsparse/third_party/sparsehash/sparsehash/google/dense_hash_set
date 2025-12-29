@@ -1,0 +1,2 @@
+// Compatibility header: redirect google/dense_hash_set to sparsehash/dense_hash_set
+#include <sparsehash/dense_hash_set>

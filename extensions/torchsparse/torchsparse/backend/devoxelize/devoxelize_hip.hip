@@ -5,7 +5,7 @@
 #include <thrust/device_vector.h>
 #include <torch/extension.h>
 
-#include <THH/THHAtomics.cuh>
+#include <THH\THHAtomics.cuh>
 
 // input features (n, c), indices (N, 8), weight (N, 8) -> output features (N,
 // c)

@@ -2,6 +2,7 @@ from typing import Any, Dict, Tuple, Union
 from enum import Enum
 from .utils import AttributeDict
 from .conv_mode import ConvMode, get_kmap_mode, get_downsample_mode
+import torch
 
 
 class Dataflow(Enum):
@@ -11,10 +12,14 @@ class Dataflow(Enum):
     CodedCSR = 3
 
 
+# Detect ROCm - ImplicitGEMM uses PTX assembly which doesn't work on HIP
+_is_rocm = hasattr(torch.version, 'hip') and torch.version.hip is not None
+_default_dataflow = Dataflow.GatherScatter if _is_rocm else Dataflow.ImplicitGEMM
+
 _global_conv_config = None
 _default_conv_config = AttributeDict(
     [
-        ("dataflow", Dataflow.ImplicitGEMM),
+        ("dataflow", _default_dataflow),
         ("ifsort", False),
         ("kmap_mode", "hashmap_on_the_fly"),
         ("downsample_mode", "spconv"),

@@ -1,0 +1,22 @@
+name: windows-latest
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v2
+
+    - uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: amd64
+
+    - shell: cmd
+      name: test
+      run: mkdir build && cd build && cmake .. -DCMAKE_CXX_FLAGS="-D_SPARSEHASH_CI_TESTING_=1"
+

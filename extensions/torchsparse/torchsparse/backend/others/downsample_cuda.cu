@@ -169,7 +169,7 @@ at::Tensor downsample_cuda(at::Tensor _in_coords, at::Tensor _coords_max,
   get_output_coords_kernel<<<int(ceil((double)N / 256)), 256>>>(
       N, kernel_volume, in_coords, kernel_sizes, stride,
       coords_min, coords_max, padding,
-      n_out_points, _out_coords_transformed.data_ptr<long>());
+      n_out_points, _out_coords_transformed.data_ptr<int64_t>());
 
   int n_out_points_scalar = (int)_n_out_points.item<int>();
 
@@ -183,7 +183,7 @@ at::Tensor downsample_cuda(at::Tensor _in_coords, at::Tensor _coords_max,
   int* out_coords = _out_coords.data_ptr<int>();
 
   inverse_transform_coords_kernel<<<int(ceil((double)num_out_points / 256)), 256>>>(
-      num_out_points, _out_coords_transformed.data_ptr<long>(),
+      num_out_points, _out_coords_transformed.data_ptr<int64_t>(),
       coords_min, coords_max, out_coords);
 
   return _out_coords;
