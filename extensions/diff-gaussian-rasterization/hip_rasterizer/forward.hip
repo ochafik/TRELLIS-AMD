@@ -203,13 +203,13 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// Use direct HIP thread indexing instead of cooperative_groups
 	// to ensure correct idx calculation on AMD GPUs
 	auto idx = blockIdx.x * blockDim.x + threadIdx.x;
-	
+
 	// DEBUG: Force write BEFORE any checks to verify kernel launches
 	// Write to index 0-9 unconditionally (using threadIdx to avoid bounds issues)
-	if (threadIdx.x == 0 && blockIdx.x < 10) {
-		tiles_touched[blockIdx.x] = 42;  // Magic number to verify kernel runs
-	}
-	
+	// if (threadIdx.x == 0 && blockIdx.x < 10) {
+	// 	tiles_touched[blockIdx.x] = 42;  // Magic number to verify kernel runs
+	// }
+
 	if (idx >= P)
 		return;
 
@@ -220,12 +220,12 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	// DEBUG TEST: Force first 1000 Gaussians to have tiles_touched = 1
 	// This verifies the kernel write path works
-	if (idx < 1000) {
-		tiles_touched[idx] = 1;
-		radii[idx] = 1;
-		// Skip the rest for these test Gaussians
-		return;
-	}
+	// if (idx < 1000) {
+	// 	tiles_touched[idx] = 1;
+	// 	radii[idx] = 1;
+	// 	// Skip the rest for these test Gaussians
+	// 	return;
+	// }
 
 	// Perform near culling, quit if outside.
 	float3 p_view;
@@ -437,7 +437,7 @@ void FORWARD::render(
 	const float* bg_color,
 	float* out_color)
 {
-	std::cerr << "[HIP DEBUG] Launching renderCUDA with grid=(" << grid.x << "," << grid.y << "), block=(" << block.x << "," << block.y << ")" << std::endl;
+	// std::cerr << "[HIP DEBUG] Launching renderCUDA with grid=(" << grid.x << "," << grid.y << "), block=(" << block.x << "," << block.y << ")" << std::endl;
 	renderCUDA<NUM_CHANNELS><<<grid, block>>>(
 		ranges,
 		point_list,
@@ -450,10 +450,10 @@ void FORWARD::render(
 		n_contrib,
 		bg_color,
 		out_color);
-	hipError_t err = hipGetLastError();
-	if (err != hipSuccess) {
-		std::cerr << "[HIP ERROR] renderCUDA failed: " << hipGetErrorString(err) << std::endl;
-	}
+	// hipError_t err = hipGetLastError();
+	// if (err != hipSuccess) {
+	// 	std::cerr << "[HIP ERROR] renderCUDA failed: " << hipGetErrorString(err) << std::endl;
+	// }
 }
 
 void FORWARD::preprocess(int P, int D, int M,
@@ -485,8 +485,8 @@ void FORWARD::preprocess(int P, int D, int M,
 {
 	int numBlocks = (P + 255) / 256;
 	int blockSize = 256;
-	std::cerr << "[HIP LAUNCH DEBUG] preprocessCUDA launch: numBlocks=" << numBlocks << ", blockSize=" << blockSize << ", P=" << P << std::endl;
-	
+	// std::cerr << "[HIP LAUNCH DEBUG] preprocessCUDA launch: numBlocks=" << numBlocks << ", blockSize=" << blockSize << ", P=" << P << std::endl;
+
 	preprocessCUDA<NUM_CHANNELS><<<numBlocks, blockSize>>>(
 		P, D, M,
 		means3D,
@@ -498,7 +498,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		clamped,
 		cov3D_precomp,
 		colors_precomp,
-		viewmatrix, 
+		viewmatrix,
 		projmatrix,
 		cam_pos,
 		W, H,
@@ -515,10 +515,10 @@ void FORWARD::preprocess(int P, int D, int M,
 		tiles_touched,
 		prefiltered
 		);
-	hipError_t err = hipGetLastError();
-	if (err != hipSuccess) {
-		std::cerr << "[HIP KERNEL] preprocessCUDA launch FAILED: " << hipGetErrorString(err) << std::endl;
-	} else {
-		std::cerr << "[HIP KERNEL] preprocessCUDA launched successfully, P=" << P << std::endl;
-	}
+	// hipError_t err = hipGetLastError();
+	// if (err != hipSuccess) {
+	// 	std::cerr << "[HIP KERNEL] preprocessCUDA launch FAILED: " << hipGetErrorString(err) << std::endl;
+	// } else {
+	// 	std::cerr << "[HIP KERNEL] preprocessCUDA launched successfully, P=" << P << std::endl;
+	// }
 }

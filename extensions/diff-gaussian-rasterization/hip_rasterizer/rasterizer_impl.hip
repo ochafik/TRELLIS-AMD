@@ -122,35 +122,35 @@ __global__ void testKernel(uint32_t* data, int n)
 void customInclusiveScan(uint32_t* d_input, uint32_t* d_output, int n)
 {
 	if (n <= 0) return;
-	
+
 	// Allocate host memory
 	uint32_t* h_data = new uint32_t[n];
-	
+
 	// Copy from device to host
 	hipMemcpy(h_data, d_input, n * sizeof(uint32_t), hipMemcpyDeviceToHost);
-	
+
 	// DEBUG: Print first 10 input values
-	std::cerr << "[HIP SCAN DEBUG] First 10 tiles_touched values (before scan): ";
-	for (int i = 0; i < 10 && i < n; i++) {
-		std::cerr << h_data[i] << " ";
-	}
-	std::cerr << std::endl;
-	
+	// std::cerr << "[HIP SCAN DEBUG] First 10 tiles_touched values (before scan): ";
+	// for (int i = 0; i < 10 && i < n; i++) {
+	// 	std::cerr << h_data[i] << " ";
+	// }
+	// std::cerr << std::endl;
+
 	// Compute sum of first 1000 elements to check if data is reasonable
-	uint32_t sum = 0;
-	for (int i = 0; i < 1000 && i < n; i++) {
-		sum += h_data[i];
-	}
-	std::cerr << "[HIP SCAN DEBUG] Sum of first 1000 tiles_touched: " << sum << std::endl;
-	
+	// uint32_t sum = 0;
+	// for (int i = 0; i < 1000 && i < n; i++) {
+	// 	sum += h_data[i];
+	// }
+	// std::cerr << "[HIP SCAN DEBUG] Sum of first 1000 tiles_touched: " << sum << std::endl;
+
 	// Perform inclusive scan on CPU
 	for (int i = 1; i < n; i++) {
 		h_data[i] += h_data[i-1];
 	}
-	
+
 	// Copy back to device
 	hipMemcpy(d_output, h_data, n * sizeof(uint32_t), hipMemcpyHostToDevice);
-	
+
 	// Cleanup
 	delete[] h_data;
 }
@@ -359,9 +359,7 @@ int CudaRasterizer::Rasterizer::forward(
 	// If we still see zeros after kernel, kernel isn't writing
 	// If we see garbage, kernel is corrupting or pointers are wrong
 	hipMemset(geomState.tiles_touched, 0, P * sizeof(uint32_t));
-	
-	// CRITICAL: Wait for memset to complete
-	hipDeviceSynchronize();
+	// hipDeviceSynchronize();  // CRITICAL: Wait for memset to complete
 	
 	// Now run the preprocess kernel
 	CHECK_CUDA(FORWARD::preprocess(
@@ -392,25 +390,26 @@ int CudaRasterizer::Rasterizer::forward(
 		prefiltered
 	), debug)
 
-	// CRITICAL: Wait for preprocess kernel to complete before reading results
+	// Wait for preprocess kernel to complete
 	hipDeviceSynchronize();
-	
-	// DEBUG: Check for kernel launch errors
+
+	// Check for kernel launch errors
 	hipError_t kernelErr = hipGetLastError();
 	if (kernelErr != hipSuccess) {
-		std::cerr << "[HIP KERNEL ERROR] preprocessCUDA failed: " << hipGetErrorString(kernelErr) << std::endl;
-	} else {
-		std::cerr << "[HIP KERNEL] preprocessCUDA launched successfully, P=" << P << std::endl;
+		std::cerr << "[HIP ERROR] preprocessCUDA failed: " << hipGetErrorString(kernelErr) << std::endl;
 	}
+	// else {
+	// 	std::cerr << "[HIP KERNEL] preprocessCUDA launched successfully, P=" << P << std::endl;
+	// }
 
 	// DEBUG: Read what preprocessCUDA actually wrote (non-destructive)
-	uint32_t preprocess_output[10];
-	hipMemcpy(preprocess_output, geomState.tiles_touched, 10 * sizeof(uint32_t), hipMemcpyDeviceToHost);
-	std::cerr << "[HIP DEBUG] preprocessCUDA output (first 10): ";
-	for(int i = 0; i < 10; i++) {
-		std::cerr << preprocess_output[i] << " ";
-	}
-	std::cerr << std::endl;
+	// uint32_t preprocess_output[10];
+	// hipMemcpy(preprocess_output, geomState.tiles_touched, 10 * sizeof(uint32_t), hipMemcpyDeviceToHost);
+	// std::cerr << "[HIP DEBUG] preprocessCUDA output (first 10): ";
+	// for(int i = 0; i < 10; i++) {
+	// 	std::cerr << preprocess_output[i] << " ";
+	// }
+	// std::cerr << std::endl;
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
@@ -440,9 +439,9 @@ int CudaRasterizer::Rasterizer::forward(
 	// Initialize buffers to detect if kernel writes or leaves uninitialized
 	hipMemset(binningState.point_list_keys_unsorted, 0, num_rendered * sizeof(uint64_t));
 	hipMemset(binningState.point_list_unsorted, 0, num_rendered * sizeof(uint32_t));
-	hipDeviceSynchronize();
-	
-	std::cerr << "[HIP DEBUG] Launching duplicateWithKeys with num_rendered=" << num_rendered << std::endl;
+	// hipDeviceSynchronize();
+
+	// std::cerr << "[HIP DEBUG] Launching duplicateWithKeys with num_rendered=" << num_rendered << std::endl;
 	duplicateWithKeys<<<(P + 255) / 256, 256>>>(
 		P,
 		geomState.means2D,
@@ -452,33 +451,30 @@ int CudaRasterizer::Rasterizer::forward(
 		binningState.point_list_unsorted,
 		radii,
 		tile_grid);
-	hipDeviceSynchronize();
-	hipError_t dupErr = hipGetLastError();
-	if (dupErr != hipSuccess) {
-		std::cerr << "[HIP ERROR] duplicateWithKeys failed: " << hipGetErrorString(dupErr) << std::endl;
-	} else {
-		std::cerr << "[HIP DEBUG] duplicateWithKeys completed successfully" << std::endl;
-	}
+	// hipDeviceSynchronize();
+	// hipError_t dupErr = hipGetLastError();
+	// if (dupErr != hipSuccess) {
+	// 	std::cerr << "[HIP ERROR] duplicateWithKeys failed: " << hipGetErrorString(dupErr) << std::endl;
+	// } else {
+	// 	std::cerr << "[HIP DEBUG] duplicateWithKeys completed successfully" << std::endl;
+	// }
 
 	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
-	
-	// Sample UNSORTED keys before sorting to check if duplicateWithKeys produced garbage
-	{
-		uint64_t unsortedFirst[5], unsortedLast[5];
-		hipMemcpy(unsortedFirst, binningState.point_list_keys_unsorted, 5 * sizeof(uint64_t), hipMemcpyDeviceToHost);
-		int endOff = num_rendered - 5;
-		hipMemcpy(unsortedLast, binningState.point_list_keys_unsorted + endOff, 5 * sizeof(uint64_t), hipMemcpyDeviceToHost);
-		
-		std::cerr << "[HIP DEBUG] UNSORTED keys (first 5 tile IDs): ";
-		for(int i = 0; i < 5; i++) { std::cerr << (unsortedFirst[i] >> 32) << " "; }
-		std::cerr << std::endl;
-		
-		std::cerr << "[HIP DEBUG] UNSORTED keys (last 5 tile IDs @" << endOff << "): ";
-		for(int i = 0; i < 5; i++) { std::cerr << (unsortedLast[i] >> 32) << " "; }
-		std::cerr << std::endl;
-	}
-	
-	std::cerr << "[HIP DEBUG] Launching SortPairs with num_rendered=" << num_rendered << ", bit=" << bit << std::endl;
+
+	// DEBUG: Sample UNSORTED keys before sorting to check if duplicateWithKeys produced garbage
+	// {
+	// 	uint64_t unsortedFirst[5], unsortedLast[5];
+	// 	hipMemcpy(unsortedFirst, binningState.point_list_keys_unsorted, 5 * sizeof(uint64_t), hipMemcpyDeviceToHost);
+	// 	int endOff = num_rendered - 5;
+	// 	hipMemcpy(unsortedLast, binningState.point_list_keys_unsorted + endOff, 5 * sizeof(uint64_t), hipMemcpyDeviceToHost);
+	// 	std::cerr << "[HIP DEBUG] UNSORTED keys (first 5 tile IDs): ";
+	// 	for(int i = 0; i < 5; i++) { std::cerr << (unsortedFirst[i] >> 32) << " "; }
+	// 	std::cerr << std::endl;
+	// 	std::cerr << "[HIP DEBUG] UNSORTED keys (last 5 tile IDs @" << endOff << "): ";
+	// 	for(int i = 0; i < 5; i++) { std::cerr << (unsortedLast[i] >> 32) << " "; }
+	// 	std::cerr << std::endl;
+	// }
+	// std::cerr << "[HIP DEBUG] Launching SortPairs with num_rendered=" << num_rendered << ", bit=" << bit << std::endl;
 
 	// Sort complete list of (duplicated) Gaussian indices by keys
 	CHECK_CUDA(hipcub::DeviceRadixSort::SortPairs(
@@ -487,75 +483,68 @@ int CudaRasterizer::Rasterizer::forward(
 		binningState.point_list_keys_unsorted, binningState.point_list_keys,
 		binningState.point_list_unsorted, binningState.point_list,
 		num_rendered, 0, 32 + bit), debug)
-	
-	hipDeviceSynchronize();
-	std::cerr << "[HIP DEBUG] SortPairs completed" << std::endl;
 
-	std::cerr << "[HIP DEBUG] hipMemset for ranges" << std::endl;
+	// hipDeviceSynchronize();
+	// std::cerr << "[HIP DEBUG] SortPairs completed" << std::endl;
+
+	// std::cerr << "[HIP DEBUG] hipMemset for ranges" << std::endl;
 	CHECK_CUDA(hipMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
-	hipDeviceSynchronize();
-	std::cerr << "[HIP DEBUG] hipMemset completed" << std::endl;
+	// hipDeviceSynchronize();
+	// std::cerr << "[HIP DEBUG] hipMemset completed" << std::endl;
 
 	// Identify start and end of per-tile workloads in sorted list
 	if (num_rendered > 0) {
-		// Debug: check tile_grid dimensions and sample some keys
-		int numTiles = tile_grid.x * tile_grid.y;
-		int numBlocks = (num_rendered + 255) / 256;
-		std::cerr << "[HIP DEBUG] identifyTileRanges: num_rendered=" << num_rendered 
-				  << ", numBlocks=" << numBlocks 
-				  << ", tile_grid=(" << tile_grid.x << "x" << tile_grid.y << ")=" << numTiles 
-				  << std::endl;
-		
+		// DEBUG: check tile_grid dimensions and sample some keys
+		// int numTiles = tile_grid.x * tile_grid.y;
+		// int numBlocks = (num_rendered + 255) / 256;
+		// std::cerr << "[HIP DEBUG] identifyTileRanges: num_rendered=" << num_rendered
+		// 		  << ", numBlocks=" << numBlocks
+		// 		  << ", tile_grid=(" << tile_grid.x << "x" << tile_grid.y << ")=" << numTiles
+		// 		  << std::endl;
+
 		// Sample first few keys to validate
-		uint64_t sampleKeys[5];
-		hipMemcpy(sampleKeys, binningState.point_list_keys, 5 * sizeof(uint64_t), hipMemcpyDeviceToHost);
-		std::cerr << "[HIP DEBUG] Sample sorted keys (first 5 tile IDs): ";
-		for(int i = 0; i < 5; i++) {
-			uint32_t tileId = sampleKeys[i] >> 32;
-			std::cerr << tileId << " ";
-		}
-		std::cerr << std::endl;
-		
+		// uint64_t sampleKeys[5];
+		// hipMemcpy(sampleKeys, binningState.point_list_keys, 5 * sizeof(uint64_t), hipMemcpyDeviceToHost);
+		// std::cerr << "[HIP DEBUG] Sample sorted keys (first 5 tile IDs): ";
+		// for(int i = 0; i < 5; i++) {
+		// 	uint32_t tileId = sampleKeys[i] >> 32;
+		// 	std::cerr << tileId << " ";
+		// }
+		// std::cerr << std::endl;
+
 		// Sample keys from near the end where garbage might be
-		if (num_rendered > 10) {
-			uint64_t endKeys[5];
-			int endOffset = num_rendered - 5;
-			hipMemcpy(endKeys, binningState.point_list_keys + endOffset, 5 * sizeof(uint64_t), hipMemcpyDeviceToHost);
-			std::cerr << "[HIP DEBUG] Sample sorted keys (last 5 tile IDs @" << endOffset << "): ";
-			int maxTileId = 0;
-			for(int i = 0; i < 5; i++) {
-				uint32_t tileId = endKeys[i] >> 32;
-				std::cerr << tileId << " ";
-				if (tileId > maxTileId) maxTileId = tileId;
-			}
-			std::cerr << std::endl;
-			if (maxTileId >= numTiles) {
-				std::cerr << "[HIP ERROR] maxTileId=" << maxTileId << " >= numTiles=" << numTiles << " - garbage keys!" << std::endl;
-			}
-		}
-		
-		std::cerr << "[HIP DEBUG] Launching identifyTileRanges" << std::endl;
-		
-		// Validate pointers
-		std::cerr << "[HIP DEBUG] point_list_keys ptr: " << (void*)binningState.point_list_keys << std::endl;
-		std::cerr << "[HIP DEBUG] ranges ptr: " << (void*)imgState.ranges << std::endl;
-		
-		// Only launch if pointers are valid
-		if (binningState.point_list_keys == nullptr || imgState.ranges == nullptr) {
-			std::cerr << "[HIP ERROR] Null pointer in identifyTileRanges!" << std::endl;
-		} else {
-			identifyTileRanges<<<(num_rendered + 255) / 256, 256>>>(
-				num_rendered,
-				binningState.point_list_keys,
-				imgState.ranges);
-			hipDeviceSynchronize();
-			hipError_t rangeErr = hipGetLastError();
-			if (rangeErr != hipSuccess) {
-				std::cerr << "[HIP ERROR] identifyTileRanges failed: " << hipGetErrorString(rangeErr) << std::endl;
-			} else {
-				std::cerr << "[HIP DEBUG] identifyTileRanges completed successfully" << std::endl;
-			}
-		}
+		// if (num_rendered > 10) {
+		// 	uint64_t endKeys[5];
+		// 	int endOffset = num_rendered - 5;
+		// 	hipMemcpy(endKeys, binningState.point_list_keys + endOffset, 5 * sizeof(uint64_t), hipMemcpyDeviceToHost);
+		// 	std::cerr << "[HIP DEBUG] Sample sorted keys (last 5 tile IDs @" << endOffset << "): ";
+		// 	int maxTileId = 0;
+		// 	for(int i = 0; i < 5; i++) {
+		// 		uint32_t tileId = endKeys[i] >> 32;
+		// 		std::cerr << tileId << " ";
+		// 		if (tileId > maxTileId) maxTileId = tileId;
+		// 	}
+		// 	std::cerr << std::endl;
+		// 	if (maxTileId >= numTiles) {
+		// 		std::cerr << "[HIP ERROR] maxTileId=" << maxTileId << " >= numTiles=" << numTiles << " - garbage keys!" << std::endl;
+		// 	}
+		// }
+
+		// std::cerr << "[HIP DEBUG] Launching identifyTileRanges" << std::endl;
+		// std::cerr << "[HIP DEBUG] point_list_keys ptr: " << (void*)binningState.point_list_keys << std::endl;
+		// std::cerr << "[HIP DEBUG] ranges ptr: " << (void*)imgState.ranges << std::endl;
+
+		identifyTileRanges<<<(num_rendered + 255) / 256, 256>>>(
+			num_rendered,
+			binningState.point_list_keys,
+			imgState.ranges);
+		// hipDeviceSynchronize();
+		// hipError_t rangeErr = hipGetLastError();
+		// if (rangeErr != hipSuccess) {
+		// 	std::cerr << "[HIP ERROR] identifyTileRanges failed: " << hipGetErrorString(rangeErr) << std::endl;
+		// } else {
+		// 	std::cerr << "[HIP DEBUG] identifyTileRanges completed successfully" << std::endl;
+		// }
 	}
 
 	// Let each tile blend its range of Gaussians independently in parallel
