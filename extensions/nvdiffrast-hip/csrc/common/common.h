@@ -10,7 +10,16 @@
 
 // HIP/ROCm compatibility layer
 #ifdef __HIP_PLATFORM_AMD__
+// Only include HIP runtime when compiling with hipcc, not with MSVC
+#ifdef __HIPCC__
 #include <hip/hip_runtime.h>
+#else
+// Host-only code compiled with MSVC needs dim3 struct
+struct dim3 {
+    unsigned int x, y, z;
+    dim3(unsigned int vx = 1, unsigned int vy = 1, unsigned int vz = 1) : x(vx), y(vy), z(vz) {}
+};
+#endif // __HIPCC__
 
 // CUDA fast math intrinsics
 #ifndef __frcp_rz

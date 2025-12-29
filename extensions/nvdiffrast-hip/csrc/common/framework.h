@@ -14,36 +14,37 @@
 // PyTorch.
 
 #ifdef NVDR_TORCH
-#ifndef __CUDACC__
 #include <torch/extension.h>
 
-// Use HIP headers for ROCm, CUDA headers for NVIDIA
-#ifdef __HIP_PLATFORM_AMD__
-#include <ATen/hip/HIPContext.h>
+// HIP/CUDA context headers - only include when compiling with device compiler
+// because they include raw HIP/CUDA headers that MSVC can't handle
+#if defined(__HIP_PLATFORM_AMD__) && defined(__HIPCC__)
 #include <ATen/hip/impl/HIPGuardImplMasqueradingAsCUDA.h>
 #include <c10/hip/HIPStream.h>
-#else
+#elif defined(__CUDACC__)
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/CUDAUtils.h>
 #include <c10/cuda/CUDAGuard.h>
 #endif
 
+#if !defined(__CUDACC__) && !defined(__HIPCC__)
 #include <pybind11/numpy.h>
-#endif // __CUDACC__
+#endif
 
 #define NVDR_CHECK(COND, ERR)                                                  \
   do {                                                                         \
     TORCH_CHECK(COND, ERR)                                                     \
   } while (0)
 
-#ifdef __HIP_PLATFORM_AMD__
+// NVDR_CHECK_CUDA_ERROR requires CUDA/HIP types, only define when compiling with device compiler
+#if defined(__HIP_PLATFORM_AMD__) && defined(__HIPCC__)
 #define NVDR_CHECK_CUDA_ERROR(CUDA_CALL)                                       \
   do {                                                                         \
     hipError_t err = CUDA_CALL;                                                \
     TORCH_CHECK(!err, "Cuda error: ", hipGetLastError(), "[", #CUDA_CALL,      \
                 ";]");                                                         \
   } while (0)
-#else
+#elif defined(__CUDACC__)
 #define NVDR_CHECK_CUDA_ERROR(CUDA_CALL)                                       \
   do {                                                                         \
     cudaError_t err = CUDA_CALL;                                               \

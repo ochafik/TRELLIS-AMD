@@ -36,6 +36,13 @@ namespace CR
 #define CR_UNREF(X)         ((void)(X))
 #define CR_ARRAY_SIZE(X)    ((int)(sizeof(X) / sizeof((X)[0])))
 
+// Dummy LOG macro (original used glog) - outputs nothing
+// Using CR_LOG to avoid conflicts with system LOG macros
+#define INFO 0
+struct CRNullStream { template<class T> CRNullStream& operator<<(const T&) { return *this; } };
+inline CRNullStream& CR_LOG_IMPL(int) { static CRNullStream ns; return ns; }
+#define LOG(level) CR_LOG_IMPL(level)
+
 //------------------------------------------------------------------------
 
 typedef uint8_t             U8;
