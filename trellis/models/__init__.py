@@ -118,7 +118,8 @@ def from_pretrained(path: str, **kwargs):
     
     # Load state dict and remap keys if using torchsparse backend AND model uses sparse convolutions
     state_dict = load_file(model_file)
-    sparse_backend = os.environ.get('SPARSE_BACKEND', 'spconv')
+    # Import the actual sparse backend being used (respects ROCm auto-detection and env vars)
+    from ..modules.sparse import BACKEND as sparse_backend
     if sparse_backend == 'torchsparse' and model_name in _SPARSE_CONV_MODELS:
         state_dict = _remap_spconv_to_torchsparse(state_dict)
     

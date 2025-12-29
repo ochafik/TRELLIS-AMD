@@ -1,16 +1,22 @@
 from typing import *
+import torch
 
-BACKEND = 'spconv' 
+# Detect ROCm/AMD
+# - flash_attn doesn't work on AMD, use sdpa instead
+# - spconv not built for ROCm, use torchsparse instead
+_is_rocm = hasattr(torch.version, 'hip') and torch.version.hip is not None
+
+BACKEND = 'torchsparse' if _is_rocm else 'spconv'
 DEBUG = False
-ATTN = 'flash_attn'
+ATTN = 'sdpa' if _is_rocm else 'flash_attn'
 
 def __from_env():
     import os
-    
+
     global BACKEND
     global DEBUG
     global ATTN
-    
+
     env_sparse_backend = os.environ.get('SPARSE_BACKEND')
     env_sparse_debug = os.environ.get('SPARSE_DEBUG')
     env_sparse_attn = os.environ.get('SPARSE_ATTN_BACKEND')
@@ -23,8 +29,66 @@ def __from_env():
         DEBUG = env_sparse_debug == '1'
     if env_sparse_attn is not None and env_sparse_attn in ['xformers', 'flash_attn', 'sdpa', 'naive']:
         ATTN = env_sparse_attn
-        
+
     print(f"[SPARSE] Backend: {BACKEND}, Attention: {ATTN}")
+
+    # Apply torchsparse hashmap mode fix for AMD ROCm (Issue #347 workaround)
+    # The default hashmap_on_the_fly mode causes kernel crashes on AMD GPUs
+    if BACKEND == 'torchsparse' and _is_rocm:
+        try:
+            import torchsparse.nn.functional as F
+            F.set_kmap_mode("hashmap")
+            _config = F.conv_config.get_default_conv_config()
+            _config.kmap_mode = "hashmap"
+            F.conv_config.set_global_conv_config(_config)
+            print(f"[SPARSE] Applied torchsparse hashmap mode fix for AMD")
+        except Exception as e:
+            print(f"[SPARSE] Warning: Could not apply hashmap mode fix: {e}")
+
+
+# Warmup state for AMD ROCm
+_rocm_warmup_done = False
+
+def warmup_rocm_sparse():
+    """
+    Warmup torchsparse kernels for AMD ROCm.
+
+    On AMD GPUs with ROCm, torchsparse HIP kernels need to be initialized
+    before running certain PyTorch operations (like image encoding with DINOv2).
+    Otherwise, the kernels fail with 'unspecified launch failure'.
+
+    This function runs a small warmup convolution to initialize the kernels.
+    Call this before get_cond() or any image preprocessing.
+    """
+    global _rocm_warmup_done
+
+    if not _is_rocm or BACKEND != 'torchsparse' or _rocm_warmup_done:
+        return
+
+    try:
+        from torchsparse import SparseTensor
+        from torchsparse.nn import Conv3d as TSConv3d
+
+        # Create small test tensors
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        coords = torch.randint(0, 16, (100, 4), dtype=torch.int32, device=device)
+        coords[:, 0] = 0  # batch index
+        feats = torch.randn(100, 32, dtype=torch.float16, device=device)
+
+        # Run warmup convolution
+        st = SparseTensor(feats=feats, coords=coords)
+        conv = TSConv3d(32, 32, kernel_size=3, stride=1).to(device).half()
+        out = conv(st)
+        torch.cuda.synchronize()
+
+        # Clean up
+        del coords, feats, st, conv, out
+        torch.cuda.empty_cache()
+
+        _rocm_warmup_done = True
+        print(f"[SPARSE] ROCm torchsparse warmup completed")
+    except Exception as e:
+        print(f"[SPARSE] Warning: ROCm warmup failed: {e}")
         
 
 __from_env()

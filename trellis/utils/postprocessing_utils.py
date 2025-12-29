@@ -420,9 +420,9 @@ def to_glb(
         verbose (bool): Whether to print progress.
     """
     print("[GLB Export] Starting GLB extraction (this takes 5-10 minutes)...")
-    
-    vertices = mesh.vertices.cpu().numpy()
-    faces = mesh.faces.cpu().numpy()
+
+    vertices = mesh.vertices.detach().cpu().numpy()
+    faces = mesh.faces.detach().cpu().numpy()
     
     print(f"[GLB Export] Step 1/5: Mesh postprocessing (vertices={vertices.shape[0]}, faces={faces.shape[0]})...")
     

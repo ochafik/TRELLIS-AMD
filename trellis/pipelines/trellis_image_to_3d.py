@@ -152,6 +152,10 @@ class TrellisImageTo3DPipeline(Pipeline):
         Returns:
             dict: The conditioning information
         """
+        # Warmup torchsparse kernels on AMD ROCm before image encoding
+        # This prevents HIP kernel launch failures with torchsparse after DINOv2 runs
+        sp.warmup_rocm_sparse()
+
         cond = self.encode_image(image)
         neg_cond = torch.zeros_like(cond)
         return {
@@ -188,6 +192,17 @@ class TrellisImageTo3DPipeline(Pipeline):
         
         # Decode occupancy latent
         decoder = self.models['sparse_structure_decoder']
+
+        # AMD HIP FIX: Force consistent float32 precision to avoid mixed dtype errors
+        # The decoder has mixed precision (some layers fp16, some fp32) which causes
+        # HIP kernel launch failures. fp16 also causes rocBLAS/Tensile errors on RDNA.
+        # Solution: Use the model's convert_to_fp32() method which sets self.dtype AND converts params.
+        if hasattr(decoder, 'convert_to_fp32'):
+            decoder.convert_to_fp32()
+        else:
+            decoder.float()
+        z_s = z_s.float()  # Convert input to float32
+
         coords = torch.argwhere(decoder(z_s)>0)[:, [0, 2, 3, 4]].int()
 
         return coords
@@ -207,6 +222,20 @@ class TrellisImageTo3DPipeline(Pipeline):
         Returns:
             dict: The decoded structured latent.
         """
+        # AMD HIP FIX: Ensure all decoders use consistent float32 precision
+        for decoder_name in ['slat_decoder_mesh', 'slat_decoder_gs', 'slat_decoder_rf']:
+            if decoder_name in self.models:
+                decoder = self.models[decoder_name]
+                decoder.float()
+                if hasattr(decoder, 'dtype'):
+                    decoder.dtype = torch.float32
+                if hasattr(decoder, 'use_fp16'):
+                    decoder.use_fp16 = False
+
+        # Ensure SLAT tensor features are float32
+        if slat.feats.dtype != torch.float32:
+            slat = slat.replace(slat.feats.float())
+
         ret = {}
         if 'mesh' in formats:
             ret['mesh'] = self.models['slat_decoder_mesh'](slat)
@@ -232,15 +261,33 @@ class TrellisImageTo3DPipeline(Pipeline):
         """
         # Sample structured latent
         flow_model = self.models['slat_flow_model']
+
+        # AMD HIP FIX: Force consistent float32 precision to avoid mixed dtype errors
+        # convert_to_fp32() only converts some layers; also call float() for everything
+        # Also set self.dtype since the forward method uses it for type conversions
+        if hasattr(flow_model, 'convert_to_fp32'):
+            flow_model.convert_to_fp32()
+        flow_model.float()
+        flow_model.dtype = torch.float32
+        flow_model.use_fp16 = False
+
+        # AMD HIP FIX: Ensure conditioning tensors are also float32
+        cond_fp32 = {}
+        for k, v in cond.items():
+            if isinstance(v, torch.Tensor) and v.is_floating_point():
+                cond_fp32[k] = v.float()
+            else:
+                cond_fp32[k] = v
+
         noise = sp.SparseTensor(
-            feats=torch.randn(coords.shape[0], flow_model.in_channels).to(self.device),
+            feats=torch.randn(coords.shape[0], flow_model.in_channels).float().to(self.device),
             coords=coords,
         )
         sampler_params = {**self.slat_sampler_params, **sampler_params}
         slat = self.slat_sampler.sample(
             flow_model,
             noise,
-            **cond,
+            **cond_fp32,
             **sampler_params,
             verbose=True
         ).samples
