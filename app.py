@@ -160,6 +160,7 @@ def image_to_3d(
         str: The path to the video of the 3D model.
     """
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
+    os.makedirs(user_dir, exist_ok=True)
     if not is_multiimage:
         outputs = pipeline.run(
             image,
