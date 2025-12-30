@@ -140,11 +140,21 @@ IS_HIP = hasattr(torch.version, 'hip') and torch.version.hip is not None
 IS_WINDOWS = platform.system() == 'Windows'
 
 def detect_gpu_arch():
-    """Detect AMD GPU architecture from rocminfo or environment."""
+    """Detect AMD GPU architecture from PyTorch, rocminfo, or environment."""
     # Check environment variable first
     gpu_arch = os.environ.get('GPU_ARCH', os.environ.get('PYTORCH_ROCM_ARCH', ''))
     if gpu_arch:
         return gpu_arch
+
+    # Try to detect from PyTorch (most reliable on Windows)
+    try:
+        if torch.cuda.is_available():
+            props = torch.cuda.get_device_properties(0)
+            if hasattr(props, 'gcnArchName') and props.gcnArchName:
+                print(f"[nvdiffrast-hip] Detected GPU arch from PyTorch: {props.gcnArchName}")
+                return props.gcnArchName
+    except Exception as e:
+        print(f"[nvdiffrast-hip] PyTorch GPU detection failed: {e}")
 
     # Try to detect from rocminfo
     try:
@@ -267,6 +277,9 @@ if IS_HIP:
     # Add GPU architecture flag
     if 'gpu_arch' in dir():
         nvcc_flags.append(f"--offload-arch={gpu_arch}")
+
+    # Note: RDNA GPUs (gfx10xx, gfx11xx) use Wave32 by default, which is correct
+    # for nvdiffrast kernels that assume 32-thread warps
 
     # Windows-specific flags
     if IS_WINDOWS:

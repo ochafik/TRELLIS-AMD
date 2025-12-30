@@ -50,27 +50,40 @@ RasterImpl::RasterImpl(void)
   NVDR_CHECK_CUDA_ERROR(hipGetDevice(&currentDevice));
   NVDR_CHECK_CUDA_ERROR(hipDeviceGetAttribute(
       &m_numSMs, hipDeviceAttributeMultiprocessorCount, currentDevice));
+
+  // AMD HIP FIX: hipFuncGetAttributes and hipOccupancy* can fail on Windows ROCm
+  // Use sensible defaults if they fail
   hipFuncAttributes attr;
-  NVDR_CHECK_CUDA_ERROR(hipFuncGetAttributes(
-      &attr, reinterpret_cast<const void *>(fineRasterKernel)));
-  m_numFineWarpsPerBlock = min(attr.maxThreadsPerBlock / 32, CR_FINE_MAX_WARPS);
-  NVDR_CHECK_CUDA_ERROR(hipOccupancyMaxActiveBlocksPerMultiprocessor(
-      &m_numCoarseBlocksPerSM, (void *)coarseRasterKernel, 32 * CR_COARSE_WARPS,
-      0));
-  NVDR_CHECK_CUDA_ERROR(hipOccupancyMaxActiveBlocksPerMultiprocessor(
-      &m_numFineBlocksPerSM, (void *)fineRasterKernel,
-      32 * m_numFineWarpsPerBlock, 0));
+  hipError_t err = hipFuncGetAttributes(
+      &attr, reinterpret_cast<const void *>(fineRasterKernel));
+  if (err == hipSuccess) {
+    m_numFineWarpsPerBlock = min(attr.maxThreadsPerBlock / 32, CR_FINE_MAX_WARPS);
+  } else {
+    // Default: 4 warps (128 threads) is safe for most kernels
+    m_numFineWarpsPerBlock = min(4, CR_FINE_MAX_WARPS);
+    hipGetLastError(); // Clear error
+  }
 
-  // Setup functions.
+  err = hipOccupancyMaxActiveBlocksPerMultiprocessor(
+      &m_numCoarseBlocksPerSM, (void *)coarseRasterKernel, 32 * CR_COARSE_WARPS, 0);
+  if (err != hipSuccess) {
+    m_numCoarseBlocksPerSM = 2; // Safe default
+    hipGetLastError();
+  }
 
-  NVDR_CHECK_CUDA_ERROR(hipFuncSetCacheConfig((void *)triangleSetupKernel,
-                                              hipFuncCachePreferShared));
-  NVDR_CHECK_CUDA_ERROR(
-      hipFuncSetCacheConfig((void *)binRasterKernel, hipFuncCachePreferShared));
-  NVDR_CHECK_CUDA_ERROR(hipFuncSetCacheConfig((void *)coarseRasterKernel,
-                                              hipFuncCachePreferShared));
-  NVDR_CHECK_CUDA_ERROR(hipFuncSetCacheConfig((void *)fineRasterKernel,
-                                              hipFuncCachePreferShared));
+  err = hipOccupancyMaxActiveBlocksPerMultiprocessor(
+      &m_numFineBlocksPerSM, (void *)fineRasterKernel, 32 * m_numFineWarpsPerBlock, 0);
+  if (err != hipSuccess) {
+    m_numFineBlocksPerSM = 2; // Safe default
+    hipGetLastError();
+  }
+
+  // Setup cache config - non-fatal if it fails (it's just an optimization hint)
+  hipFuncSetCacheConfig((void *)triangleSetupKernel, hipFuncCachePreferShared);
+  hipFuncSetCacheConfig((void *)binRasterKernel, hipFuncCachePreferShared);
+  hipFuncSetCacheConfig((void *)coarseRasterKernel, hipFuncCachePreferShared);
+  hipFuncSetCacheConfig((void *)fineRasterKernel, hipFuncCachePreferShared);
+  hipGetLastError(); // Clear any errors from cache config
 }
 
 //------------------------------------------------------------------------

@@ -39,9 +39,11 @@ struct dim3 {
 #ifndef __match_any_sync
 #define __match_any_sync(mask, val) __ballot(1)
 #endif
-// Warp sync - HIP uses __syncthreads() or just no-op for warp-level sync
+// CRITICAL FIX: Warp sync must be a barrier, not a memory fence!
+// __threadfence_block() only ensures memory ordering, not thread synchronization
+// __builtin_amdgcn_wave_barrier() is the correct HIP equivalent
 #ifndef __syncwarp
-#define __syncwarp(...) __threadfence_block()
+#define __syncwarp(...) __builtin_amdgcn_wave_barrier()
 #endif
 
 #else

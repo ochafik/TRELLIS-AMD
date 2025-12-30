@@ -245,12 +245,12 @@ def image_to_3d(
     print(f"[DEBUG] Generation params: seed={seed}, ss_steps={ss_sampling_steps}, slat_steps={slat_sampling_steps}")
     print(f"[DEBUG] Image size: {image.size if image else 'None'}, mode: {image.mode if image else 'None'}")
 
-    # AMD HIP: Skip mesh generation since nvdiffrast crashes on HIP
-    # Mesh is only needed for GLB export and preview, both of which crash
+    # AMD HIP: Mesh generation now works with limited resolution (128px max)
+    # MeshRenderer handles the limitation internally
     _is_amd = hasattr(torch.version, 'hip') and torch.version.hip is not None
-    _formats = ["gaussian"] if _is_amd else ["gaussian", "mesh"]
+    _formats = ["gaussian", "mesh"]
     if _is_amd:
-        print("[AMD] Generating Gaussian only (mesh/GLB export disabled due to nvdiffrast HIP issues)")
+        print("[AMD] Generating Gaussian + Mesh (nvdiffrast limited to 128px resolution)")
 
     if not is_multiimage:
         outputs = pipeline.run(
@@ -284,16 +284,13 @@ def image_to_3d(
             mode=multiimage_algo,
         )
     video = render_utils.render_video(outputs['gaussian'][0], num_frames=120, resolution=256)['color']
-    # AMD HIP: Skip mesh normal rendering entirely - nvdiffrast MeshRenderer causes segfault
-    _is_amd = hasattr(torch.version, 'hip') and torch.version.hip is not None
-    if 'mesh' in outputs and not _is_amd:
+    # AMD HIP: Mesh normal rendering now works with limited resolution
+    if 'mesh' in outputs:
         try:
             video_geo = render_utils.render_video(outputs['mesh'][0], num_frames=120, resolution=256)['normal']
             video = [np.concatenate([video[i], video_geo[i]], axis=1) for i in range(len(video))]
         except Exception as e:
-            print(f"[HIP] Mesh normal rendering failed (nvdiffrast issue), showing Gaussian only: {e}")
-    elif _is_amd:
-        print("[AMD] Skipping mesh normal preview (nvdiffrast crashes on HIP)")
+            print(f"[WARNING] Mesh normal rendering failed, showing Gaussian only: {e}")
     video_path = os.path.join(user_dir, 'sample.mp4')
     imageio.mimsave(video_path, video, fps=15)
     mesh_output = outputs['mesh'][0] if 'mesh' in outputs else None
@@ -321,12 +318,8 @@ def extract_glb(
     """
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
 
-    # AMD HIP: GLB export is not supported due to nvdiffrast crashes
-    _is_amd = hasattr(torch.version, 'hip') and torch.version.hip is not None
-    if _is_amd:
-        raise gr.Error("GLB export is not available on AMD GPUs (nvdiffrast HIP crashes). Please use 'Extract Gaussian (.ply)' instead - you can convert PLY to other formats using Blender or online tools.")
-
-    # Import postprocessing_utils lazily - it imports nvdiffrast which crashes on AMD
+    # Import postprocessing_utils lazily (it imports nvdiffrast)
+    # AMD HIP: Now works with 128px resolution limit workaround in MeshRenderer
     from trellis.utils import postprocessing_utils
 
     gs, mesh = unpack_state(state)

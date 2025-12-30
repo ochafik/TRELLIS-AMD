@@ -41,6 +41,10 @@ class MeshRenderer:
         rendering_options (dict): Rendering options.
         glctx (nvdiffrast.torch.RasterizeGLContext): RasterizeGLContext object for CUDA/OpenGL interop.
         """
+    # AMD HIP: Max rasterization resolution for single-bin operation
+    # Multi-bin has race conditions in HIP coarse raster kernel
+    AMD_MAX_RASTER_RES = 128
+
     def __init__(self, rendering_options={}, device='cuda'):
         self.rendering_options = edict({
             "resolution": None,
@@ -49,8 +53,12 @@ class MeshRenderer:
             "ssaa": 1
         })
         self.rendering_options.update(rendering_options)
-        self.glctx = dr.RasterizeGLContext(device=device)  # AMD HIP FIX: use OpenGL instead of CUDA
-        self.device=device
+        self.glctx = dr.RasterizeCudaContext(device=device)
+        self.device = device
+        # AMD HIP detection
+        self._is_amd = hasattr(torch.version, 'hip') and torch.version.hip is not None
+        if self._is_amd:
+            print(f"[MeshRenderer] AMD HIP detected, limiting raster resolution to {self.AMD_MAX_RASTER_RES}px")
         
     def render(
             self,
@@ -80,25 +88,37 @@ class MeshRenderer:
         near = self.rendering_options["near"]
         far = self.rendering_options["far"]
         ssaa = self.rendering_options["ssaa"]
-        
+
+        # AMD HIP: Limit rasterization resolution to avoid multi-bin race conditions
+        raster_res = resolution * ssaa
+        needs_upscale = False
+        if self._is_amd and raster_res > self.AMD_MAX_RASTER_RES:
+            raster_res = self.AMD_MAX_RASTER_RES
+            needs_upscale = True
+
+        # Debug: Log mesh stats
+        if self._is_amd:
+            print(f"[MeshRenderer] Rendering mesh: {mesh.vertices.shape[0]} verts, {mesh.faces.shape[0]} faces, res={raster_res}")
+
         if mesh.vertices.shape[0] == 0 or mesh.faces.shape[0] == 0:
+            print(f"[MeshRenderer] WARNING: Empty mesh (verts={mesh.vertices.shape[0]}, faces={mesh.faces.shape[0]})")
             default_img = torch.zeros((1, resolution, resolution, 3), dtype=torch.float32, device=self.device)
             ret_dict = {k : default_img if k in ['normal', 'normal_map', 'color'] else default_img[..., :1] for k in return_types}
             return ret_dict
-        
+
         perspective = intrinsics_to_projection(intrinsics, near, far)
-        
+
         RT = extrinsics.unsqueeze(0)
         full_proj = (perspective @ extrinsics).unsqueeze(0)
-        
+
         vertices = mesh.vertices.unsqueeze(0)
 
         vertices_homo = torch.cat([vertices, torch.ones_like(vertices[..., :1])], dim=-1)
-        vertices_camera = torch.bmm(vertices_homo, RT.transpose(-1, -2))
-        vertices_clip = torch.bmm(vertices_homo, full_proj.transpose(-1, -2))
+        vertices_camera = torch.bmm(vertices_homo, RT.transpose(-1, -2)).contiguous()
+        vertices_clip = torch.bmm(vertices_homo, full_proj.transpose(-1, -2)).contiguous()
         faces_int = mesh.faces.int()
         rast, _ = dr.rasterize(
-            self.glctx, vertices_clip, faces_int, (resolution * ssaa, resolution * ssaa))
+            self.glctx, vertices_clip, faces_int, (raster_res, raster_res))
         
         out_dict = edict()
         for type in return_types:
@@ -123,7 +143,8 @@ class MeshRenderer:
                 img = dr.interpolate(mesh.vertex_attrs[:, :3].contiguous(), rast, faces_int)[0]
                 img = dr.antialias(img, rast, vertices_clip, faces_int)
 
-            if ssaa > 1:
+            # AMD HIP: upscale from limited resolution, or downsample from ssaa
+            if needs_upscale or ssaa > 1:
                 img = F.interpolate(img.permute(0, 3, 1, 2), (resolution, resolution), mode='bilinear', align_corners=False, antialias=True)
                 img = img.squeeze()
             else:

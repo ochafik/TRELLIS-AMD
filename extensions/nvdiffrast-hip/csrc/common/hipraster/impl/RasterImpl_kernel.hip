@@ -2,7 +2,8 @@
 #include "hip/hip_runtime.h"
 
 // HIP/ROCm warp intrinsic compatibility macros
-// CUDA uses _sync versions that HIP doesn't have
+// CUDA uses _sync versions with masks, HIP doesn't need masks
+// NOTE: HIP __ballot/__all/__any work on the full wavefront
 #ifndef __ballot_sync
 #define __ballot_sync(mask, predicate) __ballot(predicate)
 #endif
@@ -12,8 +13,11 @@
 #ifndef __any_sync
 #define __any_sync(mask, predicate) __any(predicate)
 #endif
+// CRITICAL FIX: __syncwarp must be a barrier, not a memory fence!
+// __threadfence_block() only ensures memory ordering, not thread synchronization
+// __builtin_amdgcn_wave_barrier() is the correct HIP equivalent
 #ifndef __syncwarp
-#define __syncwarp(...) __threadfence_block()
+#define __syncwarp(...) __builtin_amdgcn_wave_barrier()
 #endif
 
 // Copyright (c) 2009-2022, NVIDIA CORPORATION.  All rights reserved.
@@ -50,8 +54,8 @@ namespace CR
 
 __global__ void __launch_bounds__(CR_SETUP_WARPS * 32, CR_SETUP_OPT_BLOCKS)  triangleSetupKernel (const CR::CRParams p)  { CR::triangleSetupImpl(p); }
 __global__ void __launch_bounds__(CR_BIN_WARPS * 32, 1)                      binRasterKernel     (const CR::CRParams p)  { CR::binRasterImpl(p); }
-// AMD HIP FIX: Use simplified coarse raster that doesn't use warp-level sync
-__global__ void __launch_bounds__(CR_COARSE_WARPS * 32, 1)                   coarseRasterKernel  (const CR::CRParams p)  { CR::coarseRasterImplSimple(p); }
+// AMD HIP: Try original coarse raster now that __syncwarp is properly fixed
+__global__ void __launch_bounds__(CR_COARSE_WARPS * 32, 1)                   coarseRasterKernel  (const CR::CRParams p)  { CR::coarseRasterImpl(p); }
 __global__ void __launch_bounds__(CR_FINE_MAX_WARPS * 32, 1)                 fineRasterKernel    (const CR::CRParams p)  { CR::fineRasterImpl(p); }
 
 //------------------------------------------------------------------------
