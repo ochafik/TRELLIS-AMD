@@ -18,6 +18,9 @@ using namespace CR;
 using std::max;
 using std::min;
 
+// Set to 1 to enable verbose debug output
+#define NVDIFFRAST_DEBUG 0
+
 //------------------------------------------------------------------------
 // Kernel prototypes and variables.
 
@@ -363,53 +366,69 @@ void RasterImpl::launchStages(bool instanceMode, bool peel,
   dim3 frBlock(32, m_numFineWarpsPerBlock);
   void *args[] = {&p};
 
+#if NVDIFFRAST_DEBUG
   std::cerr << "[nvdiffrast] Starting rasterization, peel=" << peel
             << ", numTriangles=" << m_numTriangles
             << ", numImages=" << m_numImages << std::endl;
+#endif
 
   // Launch stages from setup to coarse and copy atomics to host only if this is
   // not a single-tile peeling iteration.
   if (!peel) {
     if (instanceMode) {
       int setupBlocks = (m_numTriangles - 1) / (32 * CR_SETUP_WARPS) + 1;
+#if NVDIFFRAST_DEBUG
       std::cerr << "[nvdiffrast] Launching triangleSetupKernel: blocks="
                 << setupBlocks << std::endl;
+#endif
       NVDR_CHECK_CUDA_ERROR(hipLaunchKernel(
           (void *)triangleSetupKernel, dim3(setupBlocks, 1, m_numImages),
           dim3(32, CR_SETUP_WARPS), args, 0, stream));
       hipDeviceSynchronize();
+#if NVDIFFRAST_DEBUG
       std::cerr << "[nvdiffrast] triangleSetupKernel completed" << std::endl;
+#endif
     } else {
       for (int i = 0; i < m_numImages; i++)
         p.totalCount += imageParams[i].triCount;
       int setupBlocks = (p.totalCount - 1) / (32 * CR_SETUP_WARPS) + 1;
+#if NVDIFFRAST_DEBUG
       std::cerr << "[nvdiffrast] Launching triangleSetupKernel (non-instance): "
                    "blocks="
                 << setupBlocks << ", totalCount=" << p.totalCount << std::endl;
+#endif
       NVDR_CHECK_CUDA_ERROR(
           hipLaunchKernel((void *)triangleSetupKernel, dim3(setupBlocks, 1, 1),
                           dim3(32, CR_SETUP_WARPS), args, 0, stream));
       hipDeviceSynchronize();
+#if NVDIFFRAST_DEBUG
       std::cerr << "[nvdiffrast] triangleSetupKernel completed" << std::endl;
+#endif
     }
 
+#if NVDIFFRAST_DEBUG
     std::cerr << "[nvdiffrast] Launching binRasterKernel" << std::endl;
+#endif
     NVDR_CHECK_CUDA_ERROR(hipLaunchKernel(
         (void *)binRasterKernel, dim3(CR_BIN_STREAMS_SIZE, 1, m_numImages),
         brBlock, args, 0, stream));
     hipDeviceSynchronize();
+#if NVDIFFRAST_DEBUG
     std::cerr << "[nvdiffrast] binRasterKernel completed" << std::endl;
 
     std::cerr
         << "[nvdiffrast] Launching coarseRasterKernel (simplified AMD): SMs="
         << m_numSMs << ", blocksPerSM=" << m_numCoarseBlocksPerSM << std::endl;
+#endif
     // AMD HIP FIX: Now uses coarseRasterImplSimple which avoids warp-level sync
     NVDR_CHECK_CUDA_ERROR(
         hipLaunchKernel((void *)coarseRasterKernel,
                         dim3(m_numSMs * m_numCoarseBlocksPerSM, 1, m_numImages),
                         crBlock, args, 0, stream));
     hipDeviceSynchronize();
+#if NVDIFFRAST_DEBUG
     std::cerr << "[nvdiffrast] coarseRasterKernel completed" << std::endl;
+#endif
 
     NVDR_CHECK_CUDA_ERROR(hipMemcpyAsync(
         m_crAtomicsHost.getPtr(), m_crAtomics.getPtr(),
@@ -417,18 +436,24 @@ void RasterImpl::launchStages(bool instanceMode, bool peel,
   }
 
   // Fine rasterizer is launched always.
+#if NVDIFFRAST_DEBUG
   std::cerr << "[nvdiffrast] Launching fineRasterKernel: SMs=" << m_numSMs
             << ", blocksPerSM=" << m_numFineBlocksPerSM
             << ", warpsPerBlock=" << m_numFineWarpsPerBlock << std::endl;
+#endif
   NVDR_CHECK_CUDA_ERROR(
       hipLaunchKernel((void *)fineRasterKernel,
                       dim3(m_numSMs * m_numFineBlocksPerSM, 1, m_numImages),
                       frBlock, args, 0, stream));
+#if NVDIFFRAST_DEBUG
   std::cerr << "[nvdiffrast] Waiting for fineRasterKernel..." << std::endl;
+#endif
   NVDR_CHECK_CUDA_ERROR(hipStreamSynchronize(stream));
+#if NVDIFFRAST_DEBUG
   std::cerr
       << "[nvdiffrast] fineRasterKernel completed - All rasterization done!"
       << std::endl;
+#endif
 }
 
 //------------------------------------------------------------------------

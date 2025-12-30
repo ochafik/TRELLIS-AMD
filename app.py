@@ -22,6 +22,8 @@ def _is_rocm_system():
 if _is_rocm_system():
     os.environ.setdefault('SPARSE_BACKEND', 'torchsparse')
     os.environ.setdefault('ATTN_BACKEND', 'sdpa')
+    # Enable experimental AOTriton flash/memory-efficient attention for better performance
+    os.environ.setdefault('TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL', '1')
 
 import shutil
 from typing import *
@@ -156,6 +158,9 @@ def pack_state(gs: Gaussian, mesh: MeshExtractResult = None) -> dict:
             '_opacity': gs._opacity.cpu().numpy(),
         },
     }
+    # Include _features_rest for spherical harmonics colors (needed for texture)
+    if gs._features_rest is not None:
+        state['gaussian']['_features_rest'] = gs._features_rest.cpu().numpy()
     # Only include mesh if it was generated
     if mesh is not None:
         state['mesh'] = {
@@ -179,7 +184,10 @@ def unpack_state(state: dict) -> Tuple[Gaussian, edict, str]:
     gs._scaling = torch.tensor(state['gaussian']['_scaling'], device='cuda')
     gs._rotation = torch.tensor(state['gaussian']['_rotation'], device='cuda')
     gs._opacity = torch.tensor(state['gaussian']['_opacity'], device='cuda')
-    
+    # Restore _features_rest for spherical harmonics colors (needed for texture)
+    if '_features_rest' in state['gaussian']:
+        gs._features_rest = torch.tensor(state['gaussian']['_features_rest'], device='cuda')
+
     # Handle missing mesh in gaussian-only mode
     mesh = None
     if 'mesh' in state:
@@ -187,7 +195,7 @@ def unpack_state(state: dict) -> Tuple[Gaussian, edict, str]:
             vertices=torch.tensor(state['mesh']['vertices'], device='cuda'),
             faces=torch.tensor(state['mesh']['faces'], device='cuda'),
         )
-    
+
     return gs, mesh
 
 
@@ -235,11 +243,18 @@ def image_to_3d(
     print(f"[DEBUG] Generation params: seed={seed}, ss_steps={ss_sampling_steps}, slat_steps={slat_sampling_steps}")
     print(f"[DEBUG] Image size: {image.size if image else 'None'}, mode: {image.mode if image else 'None'}")
 
+    # AMD HIP: Skip mesh generation since nvdiffrast crashes on HIP
+    # Mesh is only needed for GLB export and preview, both of which crash
+    _is_amd = hasattr(torch.version, 'hip') and torch.version.hip is not None
+    _formats = ["gaussian"] if _is_amd else ["gaussian", "mesh"]
+    if _is_amd:
+        print("[AMD] Generating Gaussian only (mesh/GLB export disabled due to nvdiffrast HIP issues)")
+
     if not is_multiimage:
         outputs = pipeline.run(
             image,
             seed=seed,
-            formats=["gaussian", "mesh"],  # Re-enabled mesh for testing
+            formats=_formats,
             preprocess_image=False,
             sparse_structure_sampler_params={
                 "steps": ss_sampling_steps,
@@ -254,7 +269,7 @@ def image_to_3d(
         outputs = pipeline.run_multi_image(
             [image[0] for image in multiimages],
             seed=seed,
-            formats=["gaussian", "mesh"],  # Re-enabled mesh for testing
+            formats=_formats,
             preprocess_image=False,
             sparse_structure_sampler_params={
                 "steps": ss_sampling_steps,
@@ -267,16 +282,16 @@ def image_to_3d(
             mode=multiimage_algo,
         )
     video = render_utils.render_video(outputs['gaussian'][0], num_frames=120, resolution=256)['color']
-    # Try mesh normal rendering, but skip if mesh not generated or fails on HIP/ROCm
-    if 'mesh' in outputs:
+    # AMD HIP: Skip mesh normal rendering entirely - nvdiffrast MeshRenderer causes segfault
+    _is_amd = hasattr(torch.version, 'hip') and torch.version.hip is not None
+    if 'mesh' in outputs and not _is_amd:
         try:
             video_geo = render_utils.render_video(outputs['mesh'][0], num_frames=120, resolution=256)['normal']
             video = [np.concatenate([video[i], video_geo[i]], axis=1) for i in range(len(video))]
         except Exception as e:
             print(f"[HIP] Mesh normal rendering failed (nvdiffrast issue), showing Gaussian only: {e}")
-            pass
-    else:
-        print("[HIP] Skipping mesh rendering (gaussian-only mode for AMD GPU)")
+    elif _is_amd:
+        print("[AMD] Skipping mesh normal preview (nvdiffrast crashes on HIP)")
     video_path = os.path.join(user_dir, 'sample.mp4')
     imageio.mimsave(video_path, video, fps=15)
     mesh_output = outputs['mesh'][0] if 'mesh' in outputs else None
@@ -303,12 +318,18 @@ def extract_glb(
         str: The path to the extracted GLB file.
     """
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
+
+    # AMD HIP: GLB export is not supported due to nvdiffrast crashes
+    _is_amd = hasattr(torch.version, 'hip') and torch.version.hip is not None
+    if _is_amd:
+        raise gr.Error("GLB export is not available on AMD GPUs (nvdiffrast HIP crashes). Please use 'Extract Gaussian (.ply)' instead - you can convert PLY to other formats using Blender or online tools.")
+
     gs, mesh = unpack_state(state)
-    
+
     # Check if mesh is available (not in gaussian-only mode)
     if mesh is None:
-        raise gr.Error("GLB extraction requires mesh data. Re-run with mesh generation enabled (not available on AMD GPU currently).")
-    
+        raise gr.Error("GLB extraction requires mesh data. Re-run with mesh generation enabled.")
+
     glb = postprocessing_utils.to_glb(gs, mesh, simplify=mesh_simplify, texture_size=texture_size, verbose=False)
     glb_path = os.path.join(user_dir, 'sample.glb')
     glb.export(glb_path)

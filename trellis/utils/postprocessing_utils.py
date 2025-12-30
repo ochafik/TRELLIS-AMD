@@ -425,16 +425,22 @@ def to_glb(
     faces = mesh.faces.detach().cpu().numpy()
     
     print(f"[GLB Export] Step 1/5: Mesh postprocessing (vertices={vertices.shape[0]}, faces={faces.shape[0]})...")
-    
+
     # mesh postprocess
-    # AMD HIP FIX: Disable fill_holes because it uses rasterizer for visibility
-    # and our nvdiffrast HIP rasterizer returns empty results, causing all faces
-    # to be marked as "invisible" and removed
+    # AMD HIP: fill_holes visibility check removes all faces on AMD GPUs
+    # The OpenGL rasterizer seems to return incorrect visibility data
+    # Disable fill_holes on AMD - mesh quality may be slightly lower but usable
+    import torch
+    _is_amd = hasattr(torch.version, 'hip') and torch.version.hip is not None
+    _fill_holes = fill_holes and not _is_amd
+    if _is_amd and fill_holes:
+        print("[GLB Export] Note: fill_holes disabled on AMD (visibility check issue)")
+
     vertices, faces = postprocess_mesh(
         vertices, faces,
         simplify=simplify > 0,
         simplify_ratio=simplify,
-        fill_holes=False,  # AMD HIP FIX: Disabled - rasterizer returns empty visibility
+        fill_holes=_fill_holes,
         fill_holes_max_hole_size=fill_holes_max_size,
         fill_holes_max_hole_nbe=int(250 * np.sqrt(1-simplify)),
         fill_holes_resolution=1024,
@@ -452,16 +458,29 @@ def to_glb(
     
     # bake texture
     observations, extrinsics, intrinsics = render_multiview(app_rep, resolution=1024, nviews=100)
+
+    # Debug: Check rendered observations
+    obs_means = [obs.mean() for obs in observations]
+    obs_maxs = [obs.max() for obs in observations]
+    print(f"[GLB Debug] observations: {len(observations)} views, mean brightness: {np.mean(obs_means):.2f}, max: {np.mean(obs_maxs):.2f}")
+    if np.mean(obs_means) < 1.0:
+        print(f"[GLB Debug] WARNING: Observations are nearly black! Gaussian rendering may have failed.")
+
     masks = [np.any(observation > 0, axis=-1) for observation in observations]
     extrinsics = [extrinsics[i].cpu().numpy() for i in range(len(extrinsics))]
     intrinsics = [intrinsics[i].cpu().numpy() for i in range(len(intrinsics))]
-    
-    print(f"[GLB Export] Step 4/5: Baking texture (2500 optimization steps)...")
-    
+
+    # AMD HIP: Use 'fast' mode instead of 'opt' to avoid dr.texture() crash
+    _texture_mode = 'fast' if _is_amd else 'opt'
+    if _is_amd:
+        print(f"[GLB Export] Step 4/5: Baking texture (fast mode for AMD)...")
+    else:
+        print(f"[GLB Export] Step 4/5: Baking texture (2500 optimization steps)...")
+
     texture = bake_texture(
         vertices, faces, uvs,
         observations, masks, extrinsics, intrinsics,
-        texture_size=texture_size, mode='opt',
+        texture_size=texture_size, mode=_texture_mode,
         lambda_tv=0.01,
         verbose=verbose
     )
