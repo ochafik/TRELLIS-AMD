@@ -1,7 +1,28 @@
-import gradio as gr
-from gradio_litmodel3d import LitModel3D
-
+# AMD ROCm configuration - must be set before importing torch
 import os
+import sys
+
+def _is_rocm_system():
+    """Detect if running on AMD ROCm (before torch import)."""
+    # Check common ROCm environment variables
+    if os.environ.get('ROCM_PATH') or os.environ.get('HIP_PATH'):
+        return True
+    # Check for ROCm libraries in PATH or common locations
+    if sys.platform == 'win32':
+        # Windows: check for HIP runtime
+        for path in os.environ.get('PATH', '').split(';'):
+            if 'hip' in path.lower() or 'rocm' in path.lower():
+                return True
+    else:
+        # Linux: check common ROCm paths
+        if os.path.exists('/opt/rocm'):
+            return True
+    return False
+
+if _is_rocm_system():
+    os.environ.setdefault('SPARSE_BACKEND', 'torchsparse')
+    os.environ.setdefault('ATTN_BACKEND', 'sdpa')
+
 import shutil
 from typing import *
 import torch
@@ -9,9 +30,57 @@ import numpy as np
 import imageio
 from easydict import EasyDict as edict
 from PIL import Image
+
+# Hot-patch gradio_client to fix boolean schema bug (additionalProperties: true)
+# This must happen BEFORE importing gradio
+def _patch_gradio_client():
+    try:
+        import gradio_client.utils as gc_utils
+
+        # Patch get_type to handle boolean schemas
+        _original_get_type = gc_utils.get_type
+        def _patched_get_type(schema):
+            if isinstance(schema, bool):
+                return "any" if schema else "never"
+            if not isinstance(schema, dict):
+                return "any"
+            return _original_get_type(schema)
+        gc_utils.get_type = _patched_get_type
+
+        # Patch _json_schema_to_python_type to handle boolean schemas
+        _original_json_schema = gc_utils._json_schema_to_python_type
+        def _patched_json_schema(schema, defs):
+            if isinstance(schema, bool):
+                return "Any" if schema else "Never"
+            return _original_json_schema(schema, defs)
+        gc_utils._json_schema_to_python_type = _patched_json_schema
+
+        print("[PATCH] Applied gradio_client boolean schema fix")
+    except Exception as e:
+        print(f"[PATCH] Warning: Could not patch gradio_client: {e}")
+
+_patch_gradio_client()
+
+import gradio as gr
+from gradio_litmodel3d import LitModel3D
+
 from trellis.pipelines import TrellisImageTo3DPipeline
 from trellis.representations import Gaussian, MeshExtractResult
 from trellis.utils import render_utils, postprocessing_utils
+
+# AMD/ROCm Deterministic Mode - helps debug numerical differences
+# Set TRELLIS_DETERMINISTIC=1 to enable
+DETERMINISTIC_MODE = os.environ.get('TRELLIS_DETERMINISTIC', '0') == '1'
+if DETERMINISTIC_MODE:
+    print("[DETERMINISTIC] Enabling deterministic mode for debugging")
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    # For ROCm
+    os.environ['ROCBLAS_REPRODUCIBLE'] = '1'
+    os.environ['HIPBLASLT_DETERMINISTIC'] = '1'
+else:
+    print("[DETERMINISTIC] Deterministic mode disabled (set TRELLIS_DETERMINISTIC=1 to enable)")
 
 # Configure torchsparse for HIP/ROCm compatibility
 # Use GatherScatter dataflow instead of ImplicitGEMM (which requires PTX assembly)
@@ -161,6 +230,11 @@ def image_to_3d(
     """
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
     os.makedirs(user_dir, exist_ok=True)
+
+    # Debug output
+    print(f"[DEBUG] Generation params: seed={seed}, ss_steps={ss_sampling_steps}, slat_steps={slat_sampling_steps}")
+    print(f"[DEBUG] Image size: {image.size if image else 'None'}, mode: {image.mode if image else 'None'}")
+
     if not is_multiimage:
         outputs = pipeline.run(
             image,

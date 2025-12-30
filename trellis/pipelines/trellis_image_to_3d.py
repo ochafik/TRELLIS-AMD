@@ -71,13 +71,42 @@ class TrellisImageTo3DPipeline(Pipeline):
         """
         Initialize the image conditioning model.
         """
+        import os
+
+        # AMD ROCm: Disable xformers for DINOv2 (not compatible with AMD)
+        # This forces DINOv2 to use standard PyTorch attention
+        _is_rocm = hasattr(torch.version, 'hip') and torch.version.hip is not None
+        if _is_rocm:
+            os.environ['XFORMERS_DISABLED'] = '1'
+
         dinov2_model = torch.hub.load('facebookresearch/dinov2', name, pretrained=True)
         dinov2_model.eval()
+
+        # AMD ROCm: Run DINOv2 on CPU to avoid hipBLAS/Tensile bugs on gfx1151
+        # The Tensile GEMM kernels have issues on Strix Point (gfx1151) that cause
+        # incorrect output or crashes. CPU is slower but produces correct results.
+        if _is_rocm:
+            print("[AMD] Running DINOv2 on CPU to avoid hipBLAS/Tensile bugs")
+            print("[AMD] This is slower but produces correct conditioning output")
+            dinov2_model.float().cpu()  # Keep on CPU
+            self._dinov2_on_cpu = True
+        else:
+            self._dinov2_on_cpu = False
+
         self.models['image_cond_model'] = dinov2_model
         transform = transforms.Compose([
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
         self.image_cond_model_transform = transform
+
+    def cuda(self) -> None:
+        """
+        Move models to CUDA, but keep DINOv2 on CPU for AMD ROCm.
+        """
+        super().cuda()
+        # On AMD ROCm, move DINOv2 back to CPU after parent moves everything to CUDA
+        if getattr(self, '_dinov2_on_cpu', False):
+            self.models['image_cond_model'].cpu()
 
     def preprocess_image(self, input: Image.Image) -> Image.Image:
         """
@@ -126,20 +155,91 @@ class TrellisImageTo3DPipeline(Pipeline):
         Returns:
             torch.Tensor: The encoded features.
         """
+        import os
+        _debug_encode = os.environ.get('DEBUG_ENCODE', '0') == '1'
+
         if isinstance(image, torch.Tensor):
             assert image.ndim == 4, "Image tensor should be batched (B, C, H, W)"
         elif isinstance(image, list):
             assert all(isinstance(i, Image.Image) for i in image), "Image list should be list of PIL images"
+            if _debug_encode:
+                print(f"[DEBUG_ENCODE] Input: {len(image)} images")
+                for idx, img in enumerate(image):
+                    arr = np.array(img)
+                    print(f"  Image {idx}: size={img.size}, mode={img.mode}, np_min={arr.min()}, np_max={arr.max()}, np_mean={arr.mean():.2f}")
             image = [i.resize((518, 518), Image.LANCZOS) for i in image]
             image = [np.array(i.convert('RGB')).astype(np.float32) / 255 for i in image]
+            if _debug_encode:
+                for idx, arr in enumerate(image):
+                    print(f"  After RGB conv {idx}: shape={arr.shape}, min={arr.min():.4f}, max={arr.max():.4f}, mean={arr.mean():.4f}")
             image = [torch.from_numpy(i).permute(2, 0, 1).float() for i in image]
             image = torch.stack(image).to(self.device)
+            if _debug_encode:
+                print(f"  Stacked tensor: shape={image.shape}, device={image.device}")
+                for idx in range(image.shape[0]):
+                    print(f"    Tensor {idx}: min={image[idx].min():.4f}, max={image[idx].max():.4f}, mean={image[idx].mean():.4f}")
         else:
             raise ValueError(f"Unsupported type of image: {type(image)}")
-        
+
         image = self.image_cond_model_transform(image).to(self.device)
-        features = self.models['image_cond_model'](image, is_training=True)['x_prenorm']
+        if _debug_encode:
+            print(f"  After transform: shape={image.shape}")
+            for idx in range(image.shape[0]):
+                print(f"    Normalized {idx}: min={image[idx].min():.4f}, max={image[idx].max():.4f}, mean={image[idx].mean():.4f}")
+            if image.shape[0] > 1:
+                diff = (image[0] - image[1]).abs()
+                print(f"    Tensor diff (0 vs 1): mean={diff.mean():.4f}, max={diff.max():.4f}")
+
+        # AMD ROCm: Run DINOv2 on CPU to avoid Tensile kernel bugs
+        _is_rocm = hasattr(torch.version, 'hip') and torch.version.hip is not None
+        if _is_rocm and getattr(self, '_dinov2_on_cpu', False):
+            if _debug_encode:
+                print(f"  [AMD] Running DINOv2 on CPU...")
+            # Move input to CPU for DINOv2
+            image_cpu = image.cpu()
+            features = self.models['image_cond_model'](image_cpu, is_training=True)['x_prenorm']
+            # Move output back to GPU
+            features = features.to(self.device)
+            if _debug_encode:
+                print(f"  [AMD] DINOv2 complete, features moved to {self.device}")
+        else:
+            # Standard GPU path (for NVIDIA or non-AMD systems)
+            if hasattr(self.models['image_cond_model'], 'parameters'):
+                model_device = next(self.models['image_cond_model'].parameters()).device
+                if model_device != image.device:
+                    if _debug_encode:
+                        print(f"  WARNING: Model on {model_device}, input on {image.device}. Moving model...")
+                    self.models['image_cond_model'].to(image.device)
+            features = self.models['image_cond_model'](image, is_training=True)['x_prenorm']
+
+        # AMD ROCm sanity check: verify DINOv2 is actually processing input correctly
+        # On some AMD setups, DINOv2 may return constant output regardless of input
+        if image.shape[0] > 1:
+            input_var = (image[0] - image[1]).abs().mean().item()
+            output_var = (features[0] - features[1]).abs().mean().item()
+            if input_var > 0.01 and output_var < 0.001:
+                print(f"[WARNING] DINOv2 may not be encoding images correctly!")
+                print(f"  Input images are different (var={input_var:.4f})")
+                print(f"  But DINOv2 output is identical (var={output_var:.6f})")
+                print(f"  This is a known issue on some AMD/ROCm setups.")
+
+        if _debug_encode:
+            print(f"  After DINOv2: shape={features.shape}")
+            for idx in range(features.shape[0]):
+                print(f"    Features {idx}: min={features[idx].min():.4f}, max={features[idx].max():.4f}, mean={features[idx].mean():.4f}")
+            if features.shape[0] > 1:
+                diff = (features[0] - features[1]).abs()
+                print(f"    Feature diff (0 vs 1): mean={diff.mean():.4f}, max={diff.max():.4f}")
+
         patchtokens = F.layer_norm(features, features.shape[-1:])
+        if _debug_encode:
+            print(f"  After LayerNorm: shape={patchtokens.shape}")
+            for idx in range(patchtokens.shape[0]):
+                print(f"    Patchtokens {idx}: min={patchtokens[idx].min():.4f}, max={patchtokens[idx].max():.4f}")
+            if patchtokens.shape[0] > 1:
+                diff = (patchtokens[0] - patchtokens[1]).abs()
+                print(f"    Patchtokens diff (0 vs 1): mean={diff.mean():.4f}, max={diff.max():.4f}")
+
         return patchtokens
         
     def get_cond(self, image: Union[torch.Tensor, list[Image.Image]]) -> dict:
@@ -179,13 +279,31 @@ class TrellisImageTo3DPipeline(Pipeline):
         """
         # Sample occupancy latent
         flow_model = self.models['sparse_structure_flow_model']
+
+        # AMD HIP FIX: Force consistent float32 precision for flow model
+        if hasattr(flow_model, 'convert_to_fp32'):
+            flow_model.convert_to_fp32()
+        flow_model.float()
+        if hasattr(flow_model, 'dtype'):
+            flow_model.dtype = torch.float32
+        if hasattr(flow_model, 'use_fp16'):
+            flow_model.use_fp16 = False
+
+        # AMD HIP FIX: Ensure conditioning tensors are float32
+        cond_fp32 = {}
+        for k, v in cond.items():
+            if isinstance(v, torch.Tensor) and v.is_floating_point():
+                cond_fp32[k] = v.float()
+            else:
+                cond_fp32[k] = v
+
         reso = flow_model.resolution
-        noise = torch.randn(num_samples, flow_model.in_channels, reso, reso, reso).to(self.device)
+        noise = torch.randn(num_samples, flow_model.in_channels, reso, reso, reso).float().to(self.device)
         sampler_params = {**self.sparse_structure_sampler_params, **sampler_params}
         z_s = self.sparse_structure_sampler.sample(
             flow_model,
             noise,
-            **cond,
+            **cond_fp32,
             **sampler_params,
             verbose=True
         ).samples
