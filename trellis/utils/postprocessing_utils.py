@@ -427,24 +427,24 @@ def to_glb(
     print(f"[GLB Export] Step 1/5: Mesh postprocessing (vertices={vertices.shape[0]}, faces={faces.shape[0]})...")
 
     # mesh postprocess
-    # AMD HIP: fill_holes visibility check removes all faces on AMD GPUs
-    # The OpenGL rasterizer seems to return incorrect visibility data
-    # Disable fill_holes on AMD - mesh quality may be slightly lower but usable
+    # AMD HIP: nvdiffrast has multi-bin race conditions at >128px resolution
+    # Use 128px resolution for fill_holes visibility check on AMD
     import torch
     _is_amd = hasattr(torch.version, 'hip') and torch.version.hip is not None
-    _fill_holes = fill_holes and not _is_amd
+    _fill_holes_resolution = 128 if _is_amd else 1024
+    _fill_holes_num_views = 2000 if _is_amd else 1000  # More views to compensate for lower resolution
     if _is_amd and fill_holes:
-        print("[GLB Export] Note: fill_holes disabled on AMD (visibility check issue)")
+        print(f"[GLB Export] Note: Using {_fill_holes_resolution}px resolution for fill_holes on AMD (nvdiffrast limit)")
 
     vertices, faces = postprocess_mesh(
         vertices, faces,
         simplify=simplify > 0,
         simplify_ratio=simplify,
-        fill_holes=_fill_holes,
+        fill_holes=fill_holes,
         fill_holes_max_hole_size=fill_holes_max_size,
         fill_holes_max_hole_nbe=int(250 * np.sqrt(1-simplify)),
-        fill_holes_resolution=1024,
-        fill_holes_num_views=1000,
+        fill_holes_resolution=_fill_holes_resolution,
+        fill_holes_num_views=_fill_holes_num_views,
         debug=debug,
         verbose=verbose,
     )
