@@ -68,7 +68,9 @@ from gradio_litmodel3d import LitModel3D
 
 from trellis.pipelines import TrellisImageTo3DPipeline
 from trellis.representations import Gaussian, MeshExtractResult
-from trellis.utils import render_utils, postprocessing_utils
+from trellis.utils import render_utils
+# AMD HIP: Don't import postprocessing_utils at module level - it imports nvdiffrast which crashes
+# Import lazily in extract_glb() only when needed (and only on non-AMD systems)
 
 # AMD/ROCm Deterministic Mode - helps debug numerical differences
 # Set TRELLIS_DETERMINISTIC=1 to enable
@@ -323,6 +325,9 @@ def extract_glb(
     _is_amd = hasattr(torch.version, 'hip') and torch.version.hip is not None
     if _is_amd:
         raise gr.Error("GLB export is not available on AMD GPUs (nvdiffrast HIP crashes). Please use 'Extract Gaussian (.ply)' instead - you can convert PLY to other formats using Blender or online tools.")
+
+    # Import postprocessing_utils lazily - it imports nvdiffrast which crashes on AMD
+    from trellis.utils import postprocessing_utils
 
     gs, mesh = unpack_state(state)
 
